@@ -1,0 +1,6 @@
+name "dtoh"
+description "Create C/C++ headers from D code."
+authors "Nicholas Wilson"
+copyright "Copyright © 2018, D Language Foundation"
+license "boost"
+dependency "dmd" version="~master"
