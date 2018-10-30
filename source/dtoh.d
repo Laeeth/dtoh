@@ -1069,7 +1069,7 @@ public:
             return;
         }
         
-        // Explcitly disallow templates with non-type parameters or specialization.
+        // Explicitly disallow templates with non-type parameters or specialization.
         foreach (p; *td.parameters)
         {
             if (!p.isTemplateTypeParameter() || p.specialization())
