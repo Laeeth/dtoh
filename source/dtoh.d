@@ -1060,7 +1060,7 @@ public:
         version(BUILD_COMPILER)
         {
             if (td.getModule() && !td.getModule().isFrontendModule())
-            return;
+                return;
         }
         
         if (!td.parameters || !td.onemember || !td.onemember.isStructDeclaration())
