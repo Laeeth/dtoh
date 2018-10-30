@@ -19,6 +19,12 @@ import dmd.astcodegen;
 import dmd.arraytypes;
 import dmd.globals;
 import dmd.identifier;
+import dmd.json;
+import dmd.mars;
+import dmd.root.array;
+import dmd.root.file;
+import dmd.root.filename;
+import dmd.root.rmem;
 import dmd.visitor;
 
 import dmd.root.outbuffer;
@@ -48,18 +54,20 @@ version(BUILD_COMPILER)
     ];
 }
 
-void main(string[] args)
+int main(string[] args)
 {
-    import std.stdio;
     import std.algorithm.sorting : sort;
     import std.array : array;
     import std.file : readText;
     import std.path : baseName, buildPath, dirName;
     import std.string : toStringz;
-    
-    import dmd.id;
-    import dmd.parse;
+
     import dmd.dsymbolsem;
+    import dmd.errors;
+    import dmd.id;
+    import dmd.dinifile;
+    import dmd.parse;
+
     import dmd.semantic2;
     import dmd.semantic3;
     import dmd.builtin : builtin_init;
@@ -67,6 +75,8 @@ void main(string[] args)
     import dmd.expression : Expression;
     import dmd.frontend;
     import dmd.objc : Objc;
+    import dmd.root.response;
+    import dmd.root.stringtable;
     import dmd.target : Target;
     
     import core.memory;
@@ -74,6 +84,88 @@ void main(string[] args)
     
     GC.disable();
     initDMD();
+    
+    Strings arguments = Strings(args.length);
+    for (size_t i = 0; i < args.length; i++)
+    {
+        arguments[i] = args[i].ptr;
+    }
+    if (response_expand(&arguments)) // expand response files
+        error(Loc.initial, "can't open response file");
+    auto files = Strings(arguments.dim - 1);
+    global.params.argv0 = args[0];
+
+    
+    global.inifilename = parse_conf_arg(&arguments);
+    if (global.inifilename)
+    {
+        // can be empty as in -conf=
+        if (strlen(global.inifilename) && !FileName.exists(global.inifilename))
+        error(Loc.initial, "Config file '%s' does not exist.", global.inifilename);
+    }
+    else
+    {
+        version (Windows)
+        {
+            global.inifilename = findConfFile(global.params.argv0, "sc.ini").ptr;
+        }
+        else version (Posix)
+        {
+            global.inifilename = findConfFile(global.params.argv0, "dmd.conf").ptr;
+        }
+        else
+        {
+            static assert(0, "fix this");
+        }
+    }
+    // Read the configurarion file
+    auto inifile = File(global.inifilename);
+    inifile.read();
+    /* Need path of configuration file, for use in expanding @P macro
+     */
+    const(char)* inifilepath = FileName.path(global.inifilename);
+    Strings sections;
+    StringTable environment;
+    environment._init(7);
+    /* Read the [Environment] section, so we can later
+     * pick up any DFLAGS settings.
+     */
+    sections.push("Environment");
+    parseConfFile(&environment, global.inifilename, inifilepath, inifile.len, inifile.buffer, &sections);
+    
+    const(char)* arch = global.params.is64bit ? "64" : "32"; // use default
+    arch = parse_arch_arg(&arguments, arch);
+    
+    // parse architecture from DFLAGS read from [Environment] section
+    {
+        Strings dflags;
+        getenv_setargv(readFromEnv(&environment, "DFLAGS"), &dflags);
+        environment.reset(7); // erase cached environment updates
+        arch = parse_arch_arg(&dflags, arch);
+    }
+    
+    bool is64bit = arch[0] == '6';
+    
+    version(Windows) // delete LIB entry in [Environment] (necessary for optlink) to allow inheriting environment for MS-COFF
+    if (is64bit || strcmp(arch, "32mscoff") == 0)
+    environment.update("LIB", 3).ptrvalue = null;
+    
+    // read from DFLAGS in [Environment{arch}] section
+    char[80] envsection = void;
+    sprintf(envsection.ptr, "Environment%s", arch);
+    sections.push(envsection.ptr);
+    parseConfFile(&environment, global.inifilename, inifilepath, inifile.len, inifile.buffer, &sections);
+    getenv_setargv(readFromEnv(&environment, "DFLAGS"), &arguments);
+    updateRealEnvironment(&environment);
+    environment.reset(1); // don't need environment cache any more
+    
+    if (parseCommandLine(arguments, args.length, global.params, files))
+    {
+        Loc loc;
+        errorSupplemental(loc, "run 'dmd -man' to open browser on manual");
+        return 1;
+    }
+    
 
     version(BUILD_COMPILER)
     {
@@ -137,6 +229,7 @@ void main(string[] args)
     genCppFiles(&buf, &modules);
     
     printf("%s\n", buf.peekString());
+    return 0;
 }
 
 void setVersions()
